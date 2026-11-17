@@ -1,0 +1,90 @@
+name: Atualizar README do perfil
+
+on:
+  schedule:
+    - cron: "23 9 * * 1" # toda segunda, 09:23 UTC (~06:23 em São Paulo); minuto quebrado foge do pico da hora cheia
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: atualizar-readme
+  cancel-in-progress: true
+
+jobs:
+  projetos-em-destaque:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Atualizar a seção "Projetos em destaque"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          # Inclusão explícita: só entram repos públicos com este topic
+          TOPIC: vitrine
+          # Reforço: nunca listar, mesmo que alguém ponha o topic por engano
+          EXCLUDE: calixoto,case-parcela-mais
+          LIMIT: "6"
+        run: |
+          python3 - <<'PY'
+          import json, os, re, urllib.request
+
+          owner = os.environ["OWNER"]
+          topic = os.environ["TOPIC"].strip().lower()
+          exclude = {n.strip().lower() for n in os.environ["EXCLUDE"].split(",") if n.strip()}
+          limit = int(os.environ["LIMIT"])
+
+          # /users/{owner}/repos só devolve repos públicos; topics já vêm no payload
+          req = urllib.request.Request(
+              f"https://api.github.com/users/{owner}/repos?type=owner&sort=pushed&per_page=100",
+              headers={
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+          with urllib.request.urlopen(req, timeout=30) as resp:
+              repos = json.load(resp)
+
+          items = [
+              r for r in repos
+              if topic in [t.lower() for t in r.get("topics", [])]
+              and not r["private"] and not r["fork"] and not r["archived"]
+              and r["name"].lower() not in exclude
+          ][:limit]
+
+          lines = []
+          for r in items:
+              line = f"- **[{r['name']}]({r['html_url']})**"
+              if r.get("description"):
+                  line += f": {r['description']}"
+              if (r.get("homepage") or "").startswith("http"):
+                  line += f" · [demo]({r['homepage']})"
+              lines.append(line)
+
+          # Sem nenhum repo marcado, a seção inteira (título incluso) some do README
+          block = ("### Projetos em destaque\n\n" + "\n".join(lines) + "\n\n") if lines else ""
+
+          text = open("README.md", encoding="utf-8").read()
+          pattern = re.compile(r"(<!-- VITRINE:START -->).*?(<!-- VITRINE:END -->)", re.S)
+          if not pattern.search(text):
+              raise SystemExit("Marcadores VITRINE não encontrados no README.md")
+          text = pattern.sub(lambda m: f"{m[1]}\n{block}{m[2]}", text)
+          open("README.md", "w", encoding="utf-8").write(text)
+          print(f"{len(items)} repo(s) com o topic '{topic}'.")
+          PY
+
+      - name: Commit (só se o README mudou)
+        run: |
+          if git diff --quiet -- README.md; then
+            echo "README sem mudanças."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "chore: atualiza projetos em destaque no README"
+          git push
