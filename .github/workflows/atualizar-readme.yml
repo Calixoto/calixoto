@@ -26,7 +26,7 @@ jobs:
           # Inclusão explícita: só entram repos públicos com este topic
           TOPIC: vitrine
           # Reforço: nunca listar, mesmo que alguém ponha o topic por engano
-          EXCLUDE: calixoto,case-parcela-mais
+          EXCLUDE: calixoto
           LIMIT: "6"
         run: |
           python3 - <<'PY'
